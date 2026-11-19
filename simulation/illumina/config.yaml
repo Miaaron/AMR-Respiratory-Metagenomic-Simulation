@@ -1,0 +1,31 @@
+step1a:
+  logs_dir: "/PATH/TO/PIPELINES/Nanopore/PipelinePAamikacin/logs"
+  output_dir: "/PATH/TO/WORKDIR/Illumina/PAamikacin/PA"
+step2:
+  src_dir: "/PATH/TO/WORKDIR/Samples/PAamikacin/PA"
+  dest_dir: "/PATH/TO/WORKDIR/Illumina/PAamikacin/PA"
+step2b:
+  input_base: "/PATH/TO/WORKDIR/Illumina/PAamikacin/PA"
+  output_base: "/PATH/TO/WORKDIR/Illumina/PAamikacin/PAsim"
+step3:
+  input_dir: "/PATH/TO/WORKDIR/Illumina/PAamikacin/PAsim"
+  output_dir: "/PATH/TO/WORKDIR/Illumina/PAamikacin/Merge"
+step4:
+  input_dir: "/PATH/TO/WORKDIR/Illumina/PAamikacin/Merge"
+  output_dir: "/PATH/TO/WORKDIR/Illumina/PAamikacin/Append"
+step5:
+  input_dir: "/PATH/TO/WORKDIR/Illumina/PAamikacin/Append"
+  output_dir: "/PATH/TO/WORKDIR/Illumina/PAamikacin/KMCSPS"
+  pathogen_kmers_file: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/KMCPathogens/unique_kmers.txt"
+  kmc: "/PATH/TO/ENV/bin/kmc"
+  kmc_dump: "/PATH/TO/ENV/bin/kmc_dump"
+  temp_dir: "/PATH/TO/WORKDIR/Illumina/PAamikacin/Temp"
+  batch_size: 2000000
+  kmer_size: 13
+step6:
+  parquet_folder: "/PATH/TO/WORKDIR/Illumina/PAamikacin/KMCSPS"
+  unique_kmers_file: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/KMCPathogens/unique_kmers.txt"
+  output_file: "/PATH/TO/WORKDIR/Illumina/PAamikacin/Final/final_feature_matrix.csv"
+  final_output_folder: "/PATH/TO/WORKDIR/Illumina/PAamikacin/Final"
+  top_k: 5000
+  n_folds: 5

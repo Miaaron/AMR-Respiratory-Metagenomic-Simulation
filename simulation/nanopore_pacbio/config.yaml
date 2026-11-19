@@ -1,0 +1,43 @@
+simulate:
+  base_dir: "/PATH/TO/WORKDIR/Samples/PAamikacin/PA"
+  output_dir: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/PAsim"
+  hmm_model: "/PATH/TO/ENV/bin/pbsim2/data/R94.model"
+  simulation_count_resistant: 10
+  simulation_count_susceptible: 2
+  total_bases: 1000000000
+  pathogen_percentage: 0.05
+merge:
+  input_dir: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/PAsim"
+  output_dir: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/Merge"
+kmc_extract:
+  kmc_path: "/PATH/TO/ENV/bin/kmc"
+  kmc_dump_path: "/PATH/TO/ENV/bin/kmc_dump"
+  input_dir: "/PATH/TO/WORKDIR/Samples/PAamikacin/PApathogens"
+  output_file: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/KMCPathogens/unique_kmers.txt"
+  temp_dir: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/Temp"
+  kmer_size: 13
+create_batches:
+  kmc_path: "/PATH/TO/ENV/bin/kmc"
+  kmc_dump_path: "/PATH/TO/ENV/bin/kmc_dump"
+  temp_dir: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/Temp"
+  input: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/Merge"
+  pathogen_kmers_file: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/KMCPathogens/unique_kmers.txt"
+  batch_size: 2000000
+  kmer_size: 13
+  output_dir: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/KMCSPS"
+build_feature_matrix:
+  parquet_folder: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/KMCSPS"
+  unique_kmers_file: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/KMCPathogens/unique_kmers.txt"
+  output_file: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/Final/feature_matrix.csv"
+  final_output_folder: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/Final"
+  top_k: 10000
+  n_folds: 5
+cleanup:
+  sim_dir: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/PAsim"
+  batch_dir: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/KMCSPS"
+  temp_dir: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/Temp"
+  merge_dir: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/Merge"
+  final_dir: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/Final"
+  kmc_pathogen_dir: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/KMCPathogens"
+  keep_unique_kmers: true
+  cleanup_marker: "/PATH/TO/WORKDIR/Nanopore/PAamikacin/Final/final_cleanup_done.txt"

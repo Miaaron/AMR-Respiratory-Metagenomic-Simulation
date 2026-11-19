@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+import patch_pulp
+import os, glob
+
+configfile: "config.yaml"
+
+# Automatically detect sample folders in the simulation base directory.
+SAMPLES = [os.path.basename(d) for d in glob.glob(os.path.join(config["simulate"]["base_dir"], "sample*")) if os.path.isdir(d)]
+FASTQ_BASENAMES = []
+for sample in SAMPLES:
+    # Determine the simulation count for this sample based on its name
+    if "Resistant" in sample:
+        sim_count = config["simulate"]["simulation_count_resistant"]
+    elif "Susceptible" in sample:
+        sim_count = config["simulate"]["simulation_count_susceptible"]
+    else:
+        sim_count = config["simulate"]["simulation_count_susceptible"]  # fallback
+
+    # Append each expected simulation file basename (without the .fastq extension)
+    for sim in range(1, sim_count + 1):
+        FASTQ_BASENAMES.append(f"{sample}_sim{sim}")
+
+
+print("Detected samples:", SAMPLES)
+
+# Final target: the feature matrix and metadata.
+rule all:
+    input:
+        os.path.join(config["build_feature_matrix"]["final_output_folder"], "feature_matrix.npz"),
+        os.path.join(config["build_feature_matrix"]["final_output_folder"], "feature_matrix_labels.npz"),
+        "simulate_all_done.txt",
+        "merge_all_done.txt",
+        "kmc_done.txt",
+        "batching_done.txt",
+        config["cleanup"]["cleanup_marker"]
+
+###############################################################################
+# Step 1: Simulation using PBSIM2 (Simulation.py)
+###############################################################################
+rule simulate:
+    input:
+        dummy = "config.yaml"
+    output:
+        marker = os.path.join(config["simulate"]["output_dir"], "{sample}", "simulation_done.txt")
+    params:
+        hmm_model = config["simulate"]["hmm_model"],
+        total_bases = config["simulate"]["total_bases"],
+        pathogen_percentage = config["simulate"]["pathogen_percentage"],
+        simulation_count_resistant = config["simulate"]["simulation_count_resistant"],
+        simulation_count_susceptible = config["simulate"]["simulation_count_susceptible"]
+    log:
+        log_file = os.path.join("logs", "simulate_{sample}.log")
+    shell:
+        """
+        set -euo pipefail
+        echo "[INFO] Simulating {wildcards.sample}" > {log.log_file}
+        python Simulation.py --sample_dir {config[simulate][base_dir]}/{wildcards.sample} \
+            --output_dir {config[simulate][output_dir]}/{wildcards.sample} \
+            --hmm_model {params.hmm_model} \
+            --total_bases {params.total_bases} \
+            --pathogen_percentage {params.pathogen_percentage} \
+            --simulation_count_resistant {params.simulation_count_resistant} \
+            --simulation_count_susceptible {params.simulation_count_susceptible} >> {log.log_file} 2>&1 \
+            || (echo "[ERROR] Simulation failed for {wildcards.sample}" >> {log.log_file} && exit 1)
+        """
+
+rule all_simulations_done:
+    input:
+        expand(os.path.join(config["simulate"]["output_dir"], "{sample}", "simulation_done.txt"), sample=SAMPLES)
+    output:
+        "simulate_all_done.txt"
+    shell:
+        "touch {output}"
+
+###############################################################################
+# Step 2: Merge simulated FASTQ files (Merge.py)
+###############################################################################
+rule merge:
+    input:
+        sim_marker = os.path.join(config["simulate"]["output_dir"], "{sample}", "simulation_done.txt"),
+        barrier = "simulate_all_done.txt"
+    output:
+        marker = os.path.join(config["merge"]["output_dir"], "{sample}_merge_done.txt")
+    params:
+        sample_dir = os.path.join(config["simulate"]["output_dir"], "{sample}"),
+        output_dir = config["merge"]["output_dir"]
+    log:
+        log_file = os.path.join("logs", "merge_{sample}.log")
+    shell:
+        """
+        set -euo pipefail
+        echo "[INFO] Starting merge for {wildcards.sample}" > {log.log_file} 2>&1
+        python Merge.py --input_dir {params.sample_dir} --output_dir {params.output_dir} >> {log.log_file} 2>&1 \
+        || (echo "[ERROR] Merge failed for {wildcards.sample}" >> {log.log_file} && exit 1)
+        """
+
+rule all_merges_done:
+    input:
+        expand(os.path.join(config["merge"]["output_dir"], "{sample}_merge_done.txt"), sample=SAMPLES)
+    output:
+        "merge_all_done.txt"
+    shell:
+        "touch {output}"
+
+###############################################################################
+# Step 3: Extract unique k-mers using KMC (KMCPathogen.py)
+###############################################################################
+rule kmc_extract:
+    input:
+        dummy = "config.yaml"
+    output:
+        unique_kmers = config["kmc_extract"]["output_file"]
+    log:
+        "logs/kmc_extract.log"
+    shell:
+        """
+        set -euo pipefail
+        echo "[INFO] Starting KMC extract" > {log} 2>&1
+        python KMCPathogen.py --kmc {config[kmc_extract][kmc_path]} \
+            --kmc_dump {config[kmc_extract][kmc_dump_path]} \
+            --input_dir {config[kmc_extract][input_dir]} \
+            --output_file {output.unique_kmers} \
+            --temp_dir {config[kmc_extract][temp_dir]} \
+            --kmer_size {config[kmc_extract][kmer_size]} >> {log} 2>&1 || (echo "[ERROR] KMC extract failed" >> {log} && exit 1)
+        """
+
+rule kmc_done:
+    input:
+        config["kmc_extract"]["output_file"]
+    output:
+        "kmc_done.txt"
+    shell:
+        "touch {output}"
+
+###############################################################################
+# Step 4: Create batches from merged FASTQ files (Batches.py)
+###############################################################################
+rule create_batches:
+    input:
+        merge_barrier = "merge_all_done.txt",
+        kmc_barrier = "kmc_done.txt",
+        unique_kmers = config["kmc_extract"]["output_file"]
+    output:
+        marker = os.path.join(config["create_batches"]["output_dir"], "{fastq_base}_batch_done.txt")
+    params:
+        kmc = config["create_batches"]["kmc_path"],
+        kmc_dump = config["create_batches"]["kmc_dump_path"],
+        temp_dir = config["create_batches"]["temp_dir"],
+        pathogen_kmers_file = config["create_batches"]["pathogen_kmers_file"],
+        batch_size = config["create_batches"]["batch_size"],
+        kmer_size = config["create_batches"]["kmer_size"]
+    log:
+        log_file = os.path.join("logs", "create_batches_{fastq_base}.log")
+    shell:
+        """
+        set -euo pipefail
+        echo "[INFO] Starting batch creation for {wildcards.fastq_base}" > {log.log_file} 2>&1
+        python Batches.py \
+            --input {config[merge][output_dir]}/{wildcards.fastq_base}.fastq \
+            --sample_name {wildcards.fastq_base} \
+            --output_dir {config[create_batches][output_dir]} \
+            --kmc {params.kmc} --kmc_dump {params.kmc_dump} \
+            --temp_dir {params.temp_dir} --pathogen_kmers_file {params.pathogen_kmers_file} \
+            --batch_size {params.batch_size} --kmer_size {params.kmer_size} >> {log.log_file} 2>&1 \
+            || (echo "[ERROR] Batching failed for {wildcards.fastq_base}" >> {log.log_file} && exit 1)
+        """
+
+
+rule batching_done:
+    input:
+        expand(
+            os.path.join(config["create_batches"]["output_dir"], "{fastq_base}_batch_done.txt"),
+            fastq_base=FASTQ_BASENAMES
+        )
+    output:
+        "batching_done.txt"
+    shell:
+        "touch {output}"
+
+
+###############################################################################
+# Step 5: Build feature matrix and perform CV splits (FeatureMatrix.py)
+###############################################################################
+rule build_feature_matrix:
+    input:
+        barrier = "batching_done.txt",
+        unique_kmers = config["build_feature_matrix"]["unique_kmers_file"]
+    output:
+        feature_matrix = os.path.join(config["build_feature_matrix"]["final_output_folder"], "feature_matrix.npz"),
+        metadata = os.path.join(config["build_feature_matrix"]["final_output_folder"], "feature_matrix_labels.npz"),
+        fold1_train = os.path.join(config["build_feature_matrix"]["final_output_folder"], "fold_1_train.csv"),
+        fold1_test = os.path.join(config["build_feature_matrix"]["final_output_folder"], "fold_1_test.csv"),
+        all_internal = os.path.join(config["build_feature_matrix"]["final_output_folder"], "all_internal_topk.csv")
+    params:
+        output_file = config["build_feature_matrix"]["output_file"],
+        top_k = config["build_feature_matrix"]["top_k"],
+        n_folds = config["build_feature_matrix"]["n_folds"],
+        final_output_folder = config["build_feature_matrix"]["final_output_folder"],
+        parquet_folder = config["build_feature_matrix"]["parquet_folder"]
+    log:
+        "logs/build_feature_matrix.log"
+    shell:
+        """
+        set -euo pipefail
+        echo "[INFO] Starting feature matrix creation" > {log} 2>&1
+        python FeatureMatrix.py --parquet_folder {params.parquet_folder} \
+            --unique_kmers_file {input.unique_kmers} \
+            --output_file {params.output_file} \
+            --final_output_folder {params.final_output_folder} \
+            --top_k {params.top_k} --n_folds {params.n_folds} >> {log} 2>&1 \
+            || (echo "[ERROR] Feature matrix creation failed" >> {log} && exit 1)
+        """
+###############################################################################
+# Step 6: Cleanup (FinalCleanup.py)
+###############################################################################
+rule final_cleanup:
+    input:
+        feature_matrix = os.path.join(config["build_feature_matrix"]["final_output_folder"], "feature_matrix.npz"),
+        metadata = os.path.join(config["build_feature_matrix"]["final_output_folder"], "feature_matrix_labels.npz"),
+        full_topk = os.path.join(config["build_feature_matrix"]["final_output_folder"], "all_internal_topk.csv"),
+        fold1_train = os.path.join(config["build_feature_matrix"]["final_output_folder"], "fold_1_train.csv"),
+        fold1_test = os.path.join(config["build_feature_matrix"]["final_output_folder"], "fold_1_test.csv")
+    output:
+        marker = config["cleanup"]["cleanup_marker"]
+    params:
+        sim_dir = config["cleanup"]["sim_dir"],
+        batch_dir = config["cleanup"]["batch_dir"],
+        temp_dir = config["cleanup"]["temp_dir"],
+        merge_dir = config["cleanup"]["merge_dir"],
+        final_dir = config["cleanup"]["final_dir"],
+        kmc_pathogen_dir = config["cleanup"]["kmc_pathogen_dir"],
+        keep_unique_kmers = config["cleanup"]["keep_unique_kmers"]
+    log:
+        "logs/final_cleanup.log"
+    shell:
+        r"""
+        set -euo pipefail
+        echo "[INFO] Starting final cleanup" > {log} 2>&1
+
+        EXTRA_KEEP=""
+        if [ "{params.keep_unique_kmers}" = "True" ] || [ "{params.keep_unique_kmers}" = "true" ]; then
+            EXTRA_KEEP="--keep_unique_kmers"
+        fi
+
+        python FinalCleanup.py \
+            --sim_dir {params.sim_dir} \
+            --batch_dir {params.batch_dir} \
+            --temp_dir {params.temp_dir} \
+            --merge_dir {params.merge_dir} \
+            --final_dir {params.final_dir} \
+            --kmc_pathogen_dir {params.kmc_pathogen_dir} \
+            $EXTRA_KEEP \
+            --cleanup_marker {output.marker} >> {log} 2>&1 \
+            || (echo "[ERROR] Final cleanup failed" >> {log} && exit 1)
+        """

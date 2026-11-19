@@ -1,0 +1,165 @@
+configfile: "config.yaml"
+
+rule all:
+    input:
+        "results/Step7/cleanup_done.txt"
+
+rule step1a_isscoverage:
+    output:
+        "results/Step1a/done.txt"
+    params:
+        logs_dir=config["step1a"]["logs_dir"],  # <-- New field in config.yaml
+        output_dir=config["step1a"]["output_dir"]
+    shell:
+        """
+        python Step1a_IssCov.py \
+            --logs_dir {params.logs_dir} \
+            --output_dir {params.output_dir} \
+            --marker_file {output}
+        """
+# Step 2: Populate ISS
+rule step2_populateiss:
+    input:
+        "results/Step1a/done.txt"
+    output:
+        "results/Step2/done.txt"
+    params:
+        src_dir=config["step2"]["src_dir"],
+        dest_dir=config["step2"]["dest_dir"]
+    shell:
+        "python Step2_PopulateISS.py "
+        "--src_dir {params.src_dir} "
+        "--dest_dir {params.dest_dir} "
+        "--marker_file {output}"
+
+# Step 2b: ISS Generate Simulation
+rule step2b_iss_simulation:
+    input:
+        "results/Step2/done.txt"
+    output:
+        "results/Step2b/done.txt"
+    params:
+        input_base=config["step2b"]["input_base"],
+        output_base=config["step2b"]["output_base"]
+    shell:
+        "python Step2b_simulate.py "
+        "--input_base {params.input_base} "
+        "--output_base {params.output_base} "
+        "--marker_file {output}"
+
+# Step 3: Merge FASTQ
+rule step3_merge:
+    input:
+        "results/Step2b/done.txt"
+    output:
+        "results/Step3/done.txt"
+    params:
+        input_dir=config["step3"]["input_dir"],
+        output_dir=config["step3"]["output_dir"]
+    shell:
+        "python Step3_Merge.py "
+        "--input_dir {params.input_dir} "
+        "--output_dir {params.output_dir} "
+        "--marker_file {output}"
+
+# Step 4: Append FASTQ
+rule step4_append:
+    input:
+        "results/Step3/done.txt"
+    output:
+        "results/Step4/done.txt"
+    params:
+        input_dir=config["step4"]["input_dir"],
+        output_dir=config["step4"]["output_dir"]
+    shell:
+        "python Step4_append.py "
+        "--input_dir {params.input_dir} "
+        "--output_dir {params.output_dir} "
+        "--marker_file {output}"
+
+# Step 5: KMC Batches
+rule step5_batches:
+    input:
+        "results/Step4/done.txt"
+    output:
+        "results/Step5/done.txt"
+    params:
+        input_dir=config["step5"]["input_dir"],
+        output_dir=config["step5"]["output_dir"],
+        pathogen_kmers_file=config["step5"]["pathogen_kmers_file"],
+        kmc=config["step5"]["kmc"],
+        kmc_dump=config["step5"]["kmc_dump"],
+        temp_dir=config["step5"]["temp_dir"],
+        batch_size=config["step5"]["batch_size"],
+        kmer_size=config["step5"]["kmer_size"]
+    shell:
+        "python Step5_Batches.py "
+        "--input_dir {params.input_dir} "
+        "--output_dir {params.output_dir} "
+        "--pathogen_kmers_file {params.pathogen_kmers_file} "
+        "--kmc {params.kmc} "
+        "--kmc_dump {params.kmc_dump} "
+        "--temp_dir {params.temp_dir} "
+        "--batch_size {params.batch_size} "
+        "--kmer_size {params.kmer_size} "
+        "--marker_file {output}"
+
+# Step 6: Feature Matrix
+rule step6_featurematrix:
+    input:
+        "results/Step5/done.txt"
+    output:
+        "results/Step6/done.txt"
+    params:
+        parquet_folder=config["step6"]["parquet_folder"],
+        unique_kmers_file=config["step6"]["unique_kmers_file"],
+        output_file=config["step6"]["output_file"],
+        final_output_folder=config["step6"]["final_output_folder"],
+        top_k=config["step6"]["top_k"],
+        n_folds=config["step6"]["n_folds"]
+    shell:
+        "python Step6_FeatureMatrix.py "
+        "--parquet_folder {params.parquet_folder} "
+        "--unique_kmers_file {params.unique_kmers_file} "
+        "--output_file {params.output_file} "
+        "--final_output_folder {params.final_output_folder} "
+        "--top_k {params.top_k} "
+        "--n_folds {params.n_folds} "
+        "--marker_file {output}"
+
+rule final_cleanup:
+    input:
+        "results/Step6/done.txt"
+    output:
+        "results/Step7/cleanup_done.txt"
+    shell:
+        r"""
+        set -euo pipefail
+
+        BASE="/PATH/TO/WORKDIR/Illumina/PAamikacin"
+        FINAL="$BASE/Final"
+
+        test -f "$FINAL/final_feature_matrix.npz"
+        test -f "$FINAL/final_feature_matrix_labels.npz"
+        test -f "$FINAL/fold_1_train.csv"
+        test -f "$FINAL/fold_1_test.csv"
+        test -f "$FINAL/all_internal_topk.csv"
+
+        echo "[INFO] Keeping Merge and Final"
+
+        for d in \
+          "$BASE/AB" \
+          "$BASE/ABsim" \
+          "$BASE/Append" \
+          "$BASE/KMCSPS" \
+          "$BASE/Temp"
+        do
+          if [[ -e "$d" ]]; then
+            rm -rf "$d"
+            echo "[DELETED] $d"
+          fi
+        done
+
+        mkdir -p results/Step7
+        echo "done" > {output}
+        """
